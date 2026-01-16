@@ -1,96 +1,48 @@
 #!/bin/bash
-# not my script, purely for testing purposes
-# Ensures only root has UID 0 or sudo/root-level privileges
-# Checks for users in /etc/sudoers or /etc/sudoers.d/
-# Changes logged to /root/user_privilege_audit_<timestamp>/
+echo -e "\e[38;5;46m//////////////////////////////////////////////////////\e[0m"
+echo -e "\e[38;5;46m                     Backups                         \e[0m"
+echo -e "\e[38;5;46m//////////////////////////////////////////////////////\e[0m"
+sleep 1
 
-TS=$(date +%F_%H%M%S)
-LOGDIR="/root/user_privilege_audit_${TS}"
-mkdir -p "$LOGDIR"
-LOGFILE="${LOGDIR}/changes.log"
+# Simple Backup Script
 
-echo "==============================================="
-echo "         USER PRIVILEGE AUDIT & REVERT         "
-echo "         Log directory: $LOGDIR"
-echo "==============================================="
-echo
+# Define backup destination directories
+BACKUP_DIR1="/etc/ftb"
+BACKUP_DIR2="/etc/.tarkov"
 
+# Create backup directories if they don't already exist.
+mkdir -p "$BACKUP_DIR1" "$BACKUP_DIR2"
 
-# Function to log and print messages
-log() {
-  echo -e "$1"
-  echo -e "$1" >> "$LOGFILE"
-}
+echo "Starting backup..."
 
-S=$(date +%F_%H%M%S)
-LOGDIR="/root/user_privilege_audit_${TS}"
-mkdir -p "$LOGDIR"
-LOGFILE="${LOGDIR}/changes.log"
+# Backup Postfix (configuration)
+zip -r "$BACKUP_DIR1/postfix.zip" /etc/postfix || echo "Warning: Postfix backup encountered errors."
+cp "$BACKUP_DIR1/postfix.zip" "$BACKUP_DIR2/" 2>/dev/null || echo "Warning: Could not copy Postfix backup to $BACKUP_DIR2."
+echo "Postfix backup complete."
 
-log() {
-  echo "$1"
-  echo "$1" >> "$LOGFILE"
-}
+# Backup Dovecot (configuration)
+zip -r "$BACKUP_DIR1/dovecot.zip" /etc/dovecot || echo "Warning: Dovecot backup encountered errors."
+cp "$BACKUP_DIR1/dovecot.zip" "$BACKUP_DIR2/" 2>/dev/null || echo "Warning: Could not copy Dovecot backup to $BACKUP_DIR2."
+echo "Dovecot backup complete."
 
-echo "Starting user privilege audit"
-echo "Log directory: $LOGDIR"
-echo
+# Backup network configurations
+zip -r "$BACKUP_DIR1/network_configs.zip" /etc/sysconfig/network /etc/sysconfig/network-scripts || echo "Warning: Network configurations backup encountered errors."
+cp "$BACKUP_DIR1/network_configs.zip" "$BACKUP_DIR2/" 2>/dev/null || echo "Warning: Could not copy network configurations backup to $BACKUP_DIR2."
+echo "Network configurations backup complete."
 
-# Step 1: Detect users with UID 0
-log "Checking for users with UID 0 (root privileges)"
-awk -F: '$3 == 0 {print $1 ":" $7}' /etc/passwd > "${LOGDIR}/uid0_users.txt"
+# Backup user and authentication data
+zip -r "$BACKUP_DIR1/auth_data.zip" /etc/passwd /etc/shadow /etc/group /etc/gshadow || echo "Warning: Auth data backup encountered errors."
+cp "$BACKUP_DIR1/auth_data.zip" "$BACKUP_DIR2/" 2>/dev/null || echo "Warning: Could not copy auth data backup to $BACKUP_DIR2."
+echo "User and authentication data backup complete."
 
-mapfile -t uid0_users < <(awk -F: '$3 == 0 {print $1}' /etc/passwd)
+# Backup PHP configuration file
+zip -r "$BACKUP_DIR1/php_ini.zip" /etc/php.ini || echo "Warning: PHP configuration file backup encountered errors."
+cp "$BACKUP_DIR1/php_ini.zip" "$BACKUP_DIR2/" 2>/dev/null || echo "Warning: Could not copy PHP configuration file backup to $BACKUP_DIR2."
+echo "/etc/php.ini backup complete."
 
-for user in "${uid0_users[@]}"; do
-  if [ "$user" != "root" ]; then
-    log "Found non-root user with UID 0: $user"
+# Backup PHP configuration directory
+zip -r "$BACKUP_DIR1/phpd.zip" /etc/php.d || echo "Warning: PHP configuration directory backup encountered errors."
+cp "$BACKUP_DIR1/phpd.zip" "$BACKUP_DIR2/" 2>/dev/null || echo "Warning: Could not copy PHP configuration directory backup to $BACKUP_DIR2."
+echo "/etc/php.d backup complete."
 
-    backup="/etc/passwd.bak_${user}_${TS}"
-    cp -a /etc/passwd "$backup"
-    log "Backed up /etc/passwd to $backup"
-
-    new_uid=$(awk -F: '$3>=1000 && $3<65534 {max=$3} END {print max+1}' /etc/passwd)
-    usermod -u "$new_uid" "$user"
-    log "Changed UID for $user to $new_uid"
-  fi
-done
-
-# Step 2: Check /etc/sudoers for unauthorized entries
-log
-log "Checking /etc/sudoers for unauthorized sudo access"
-grep -E '^[^#].*(ALL|NOPASSWD)' /etc/sudoers > "${LOGDIR}/sudoers_findings.txt" || true
-
-while IFS= read -r line; do
-  [ -z "$line" ] && continue
-  if ! echo "$line" | grep -qE '^root'; then
-    log "Unauthorized sudoers line detected: $line"
-
-    cp -a /etc/sudoers "${LOGDIR}/sudoers_backup_${TS}"
-    sed -i "s|^${line}|# auto-commented: ${line}|g" /etc/sudoers
-    log "Commented out unauthorized sudoers line"
-  fi
-done < "${LOGDIR}/sudoers_findings.txt"
-
-# Step 3: Check /etc/sudoers.d for privilege files
-log
-log "Checking /etc/sudoers.d for unauthorized entries"
-for f in /etc/sudoers.d/*; do
-  [ -f "$f" ] || continue
-  if grep -qE '^[^#].*(ALL|NOPASSWD)' "$f"; then
-    log "Unauthorized sudo privileges in file: $f"
-    cp -a "$f" "${LOGDIR}/"
-    sed -i 's|^\([^#].*\)|# auto-commented: \1|g' "$f"
-    log "Commented out unauthorized lines in $f"
-  fi
-done
-
-# Step 4: Summary
-log
-log "Privilege audit complete"
-log "Users with UID 0 after cleanup:"
-awk -F: '$3 == 0 {print " - " $1}' /etc/passwd >> "$LOGFILE"
-awk -F: '$3 == 0 {print " - " $1}'
-
-echo
-echo "Completed. Detailed logs saved in $LOGDIR"
+echo "All backups completed."
