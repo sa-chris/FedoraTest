@@ -1,0 +1,67 @@
+#!/bin/bash
+
+set -e
+
+echo "===== MAIL SERVER HARDENING & CHECK ====="
+
+# ️ Ensure SSL certs exist
+CERT="/etc/pki/dovecot/certs/dovecot.pem"
+KEY="/etc/pki/dovecot/private/dovecot.key"
+if [ ! -f "$CERT" ] || [ ! -f "$KEY" ]; then
+    echo "[*] Generating temporary self-signed certs..."
+    sudo mkdir -p /etc/pki/dovecot/certs /etc/pki/dovecot/private
+    sudo openssl req -new -x509 -days 365 -nodes \
+        -out "$CERT" -keyout "$KEY" \
+        -subj "/CN=mail.local"
+    sudo chmod 644 "$CERT"
+    sudo chmod 600 "$KEY"
+fi
+
+# Ensure plaintext auth disabled & SSL required
+AUTH_CONF="/etc/dovecot/conf.d/10-auth.conf"
+SSL_CONF="/etc/dovecot/conf.d/10-ssl.conf"
+
+sudo sed -i 's/^#\?disable_plaintext_auth.*/disable_plaintext_auth = yes/' "$AUTH_CONF"
+sudo sed -i 's/^#\?ssl =.*/ssl = required/' "$SSL_CONF"
+
+#  Ensure IMAPS listener enabled
+MASTER_CONF="/etc/dovecot/conf.d/10-master.conf"
+if ! grep -q "inet_listener imaps" "$MASTER_CONF"; then
+    echo "[*] Adding IMAPS listener..."
+    sudo sed -i '/service imap-login {/a \
+  inet_listener imaps {\
+    port = 993\
+    ssl = yes\
+  }' "$MASTER_CONF"
+fi
+
+# ️ Restart Dovecot
+echo "[*] Restarting Dovecot..."
+sudo systemctl restart dovecot
+
+#  Firewall setup
+echo "[*] Locking firewall to mail + webmail..."
+sudo firewall-cmd --zone=public --remove-service=ssh --permanent || true
+sudo firewall-cmd --zone=public --remove-service=dhcpv6-client --permanent || true
+for p in $(sudo firewall-cmd --zone=public --list-ports); do
+    sudo firewall-cmd --zone=public --permanent --remove-port=$p
+done
+
+# Allow required services
+for svc in smtp submission imap imaps http https; do
+    sudo firewall-cmd --zone=public --permanent --add-service=$svc
+done
+sudo firewall-cmd --reload
+
+# Report
+echo "===== READINESS REPORT ====="
+echo "Dovecot Ports:"
+sudo ss -tulnp | grep dovecot || echo "No Dovecot ports listening!"
+
+echo "Dovecot Config:"
+sudo dovecot -n | grep -E 'disable_plaintext_auth|auth_mechanisms|ssl'
+
+echo "Firewall Services:"
+sudo firewall-cmd --zone=public --list-services
+
+echo "===== MAIL SERVER READY FOR CCDC ====="
